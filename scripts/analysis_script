@@ -1,0 +1,168 @@
+import pandas as pd
+import os
+import csv
+
+tempo = '80' # Set as the value of one the available metronome tracks in the "metronome_tracks" folder
+recording_name = 'recording'
+
+# Specify the CSV file of the recording.
+csv_file_path = f'recordings/{recording_name}.csv'
+
+# Load the CSV file
+df_raw = pd.read_csv(csv_file_path)
+
+#--------------------------------------------
+
+# 1 FILTERING
+
+# Filter out 'note_off' rows
+filtering_1 = df_raw[df_raw['type'] != 'note_off']
+# Convert the results to a DataFrame
+df_filtered_1 = pd.DataFrame(filtering_1)
+# Filter out notes different to the target drum pad (remove those that are not note 79)
+filtering_2 = df_filtered_1[df_filtered_1['note'] == 79]
+# Convert the results to a DataFrame
+df_filtered_2 = pd.DataFrame(filtering_2)
+
+#--------------------------------------------
+
+# 2 ISOLATION
+
+# Isolate "time" values
+isolation = df_filtered_2['time']
+# Convert the results to a DataFrame
+df_isolated = pd.DataFrame(isolation)
+
+#--------------------------------------------
+
+#3 ALIGNMENT
+
+# Path for the intervals' file
+intervals_path = f"interval_tracks/{tempo}_intervals.csv"
+df_intervals = pd.read_csv(intervals_path)
+
+# Sort the intervals
+df_intervals = df_intervals.sort_values('start')
+alignement = []
+times_set = set(df_isolated['time'])
+
+# For each interval, find the time that falls into it
+for _, interval in df_intervals.iterrows():
+    interval_dict = interval.to_dict()
+    performance_times = [time for time in times_set if interval['start'] <= time <= interval['end']]
+    if performance_times:
+        for time in performance_times:
+            interval_dict['performance'] = time
+            alignement.append(interval_dict.copy())
+    else:
+        interval_dict['performance'] = 'N/A'
+        alignement.append(interval_dict.copy())
+
+# Convert the results to a DataFrame
+df_aligned = pd.DataFrame(alignement)
+
+#--------------------------------------------
+
+# 4 GROUPING
+
+# Function to determine interval group with continuous naming across "b" values
+def determine_continuous_interval_group(interval):
+    # Extract "b" value and "i" value
+    b_value, i_value = map(int, interval[1:].split('i'))
+    # Calculate the overall sequence number (assuming 32 intervals per "b" value, adjust as needed)
+    overall_sequence_num = (b_value - 1) * 32 + i_value
+    # Determine the note number based on the overall sequence
+    note_num = (overall_sequence_num + 1) // 2
+    return f"group {note_num}"
+
+# Define the list of accurate intervals
+accurate_intervals = ['i1', 'i3', 'i5', 'i7', 'i9', 'i11', 'i13', 'i15', 'i17', 'i19', 'i21', 'i23', 'i25', 'i27', 'i29', 'i31']
+
+# Function to determine interval type
+def determine_interval_type(interval):
+    # Extract the numeric part after "i" from the interval identifier
+    interval_num = int(interval.split('i')[-1])
+    # Determine if the interval is accurate or non-accurate based on whether the number is odd (accurate) or even (non-accurate)
+    return "accurate" if interval_num % 2 != 0 else "non-accurate"
+
+# Apply the functions to create the new columns
+df_aligned['interval type'] = df_aligned['interval'].apply(determine_interval_type)
+df_aligned['interval group'] = df_aligned['interval'].apply(determine_continuous_interval_group)
+
+grouping = df_aligned
+
+# Convert the results to a DataFrame
+df_grouped = pd.DataFrame(grouping)
+
+# Save the grouped data to a CSV file
+base_name = os.path.basename(csv_file_path).rsplit('.', 1)[0]
+output_folder_path_recording_grouped = f"results_grouped"
+os.makedirs(output_folder_path_recording_grouped, exist_ok=True)
+df_grouped.to_csv(os.path.join(output_folder_path_recording_grouped, f"{base_name}_results_grouped.csv"), index=False)
+
+#--------------------------------------------
+
+# 5 COUNTING
+
+accurate_count = 0
+non_accurate_count = 0
+
+accurate_groups = {}
+
+counted_accurate_intervals = set()
+counted_non_accurate_intervals = set()
+
+for index, row in df_grouped.iterrows():
+    group = row['interval group'] 
+    if group in [f"group {i}" for i in range(1, 17)] or group == "group 657": # Skip the first 16 groups (pre-click and the last group (cue out)
+        continue  
+
+    if pd.notnull(row['performance']) and row['performance'] != "N/A": # Check if 'performance' is not "N/A" and not null
+        interval_name = row['interval']
+
+        if row['interval type'] == 'accurate':
+            if interval_name not in counted_accurate_intervals:
+                counted_accurate_intervals.add(interval_name)
+                accurate_count += 1
+                accurate_groups[group] = True  
+        elif row['interval type'] == 'non-accurate':
+            if interval_name not in counted_non_accurate_intervals and group not in accurate_groups:
+                counted_non_accurate_intervals.add(interval_name)
+                non_accurate_count += 1
+
+total_intervals = 640
+overall_count = accurate_count
+
+accurate_count_percentage = (accurate_count / total_intervals) * 100
+non_accurate_count_percentage = (non_accurate_count / total_intervals) * 100
+overall_count_percentage = ((overall_count)/ total_intervals) * 100
+
+print(f"---------------------------------")
+print(f"PERFORMANCE: {recording_name}, tempo {tempo}")
+print(f"---------------------------------")
+print(f"RESULTS")
+print(f"Accurate intervals hit: {accurate_count} (out of {total_intervals})")
+print(f"Non-Accurate intervals hit - missing accurate: {non_accurate_count} (out of {total_intervals})")
+print(f"Overall count: {overall_count} (out of {total_intervals})")
+print(f"---------------------------------")
+print(f"SCORE: {overall_count_percentage:.2f}%")
+print(f"---------------------------------")
+
+#--------------------------------------------
+
+data = [
+    ["result", "value", "out_of", "percentage"],
+    ["overall_accurate_intervals", accurate_count, total_intervals, f"{accurate_count_percentage:.2f}%"],
+    ["overall_non_accurate_intervals_missing_accurate", non_accurate_count, total_intervals, f"{non_accurate_count_percentage:.2f}%"],
+    ["overall count", overall_count, total_intervals, f"{overall_count_percentage:.2f}%"],
+]
+
+base_name = os.path.basename(csv_file_path).rsplit('.', 1)[0]
+output_folder_path = f"results"
+os.makedirs(output_folder_path, exist_ok=True)
+new_filename = os.path.join(output_folder_path, f"{base_name}_results.csv")
+
+with open(new_filename, 'w', newline='') as csvfile:
+    csvwriter = csv.writer(csvfile)
+    csvwriter.writerow(data[0])
+    csvwriter.writerows(data[1:])
