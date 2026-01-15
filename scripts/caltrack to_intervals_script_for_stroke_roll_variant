@@ -1,0 +1,95 @@
+import pandas as pd
+import os
+import glob
+import numpy as np
+import re
+
+# Define type of stroke roll rudiment [single, double, triple], and interval's width (percentage) [50, 75]:
+strokeroll_type = 'triple'
+interval_width = 50
+
+# Define number of notes per beat (for a 4/4 time signature) of the stroke roll rudiment [single = 2, double = 4, triple = 6]:
+if strokeroll_type == 'single':
+    notes_per_beat = 2
+elif strokeroll_type == 'double':
+    notes_per_beat = 4
+elif strokeroll_type == 'triple':
+    notes_per_beat = 6
+
+# Calculate number of intervals (for a 4/4 time signature), based on the interval's width and number of notes per beat:
+notes_per_bar = notes_per_beat * 4
+
+if interval_width < 100:
+    intervals_per_note = 2
+elif interval_width == 100:
+    intervals_per_note = 1
+
+intervals_per_bar = notes_per_bar * intervals_per_note
+
+# Input folder for calculus tracks:
+folder_path = f'caltrack_strokeroll_csv/{strokeroll_type}_{interval_width}'
+
+# Output folder for intevals:
+output_folder = f'interval_tracks_strokeroll'
+os.makedirs(output_folder, exist_ok=True)
+
+# Get a list of all CSV files in the folder
+csv_files = glob.glob(os.path.join(folder_path, '*.csv'))
+
+# Loop over the list of files with the conversion process
+for file_name in csv_files:
+    # Load the CSV file
+    df = pd.read_csv(file_name)
+
+    # 1. Velocity filter (this will remove also the note_off messages)
+    df_filtered = df[df['velocity'] >= 100]
+
+    # 2. Isolate time and velocity
+    df_isolated = df_filtered[['time', 'velocity']]
+
+    # 3. Add start
+    start_row = pd.DataFrame({'time': [0], 'velocity': [127]})
+    df_start = pd.concat([start_row, df_isolated]).reset_index(drop=True)
+
+    # 4. Interval names
+    # Calculate the group and interval indices
+    group_indices = np.ceil((df_start.index + 1) / intervals_per_bar).astype(int)
+    interval_indices = ((df_start.index % intervals_per_bar) + 1).astype(int)
+
+    # Create the interval names
+    interval_names = ['b' + str(group) + 'i' + str(interval) for group, interval in zip(group_indices, interval_indices)]
+
+    # Add the interval names to the dataframe
+    df_start['interval_name'] = interval_names
+
+    # 5. Intervals chart
+        # Create a new DataFrame with the 'interval_name' and 'time' columns
+    df_intervals_chart = df_start[['interval_name', 'time']].copy()
+
+    # Rename the columns to 'interval' and 'start'
+    df_intervals_chart.columns = ['interval', 'start']
+
+    # Add a new 'end' column, which is the 'start' column shifted up by one
+    df_intervals_chart['end'] = df_intervals_chart['start'].shift(-1)
+
+    # 6. Interval duration
+    # Calculate the intervals between 'start' and 'end' values
+    df_intervals_chart['duration'] = (df_intervals_chart['end'] - df_intervals_chart['start']).round(3)
+
+    #Save files as .csv
+    # Extract the number before the underscore from the original file name
+    match = re.search(r'(\d+)_', os.path.basename(file_name))
+    if match:
+        number = match.group(1)
+        # Create a new file name by appending "intervals.csv" to the number
+        new_file_name = f"{number}_intervals_strokeroll_{strokeroll_type}_{interval_width}.csv"
+    else:
+        raise ValueError("The file name does not contain a number followed by an underscore.")
+
+    # Create a new file path in the output folder
+    new_file_path = os.path.join(output_folder, new_file_name)
+
+    # Save the updated DataFrame to a new CSV file in the output folder
+    df_intervals_chart.to_csv(new_file_path, index=False)
+        
+    print(f"Processed file: {file_name}")
