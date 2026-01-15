@@ -1,0 +1,54 @@
+import os
+import csv
+from mido import MidiFile
+
+
+input_folder_path = "caltrack_midi"
+output_folder_path = "caltrack_csv"
+os.makedirs(output_folder_path, exist_ok=True)
+
+def ticks_to_seconds(ticks, tempo, ticks_per_beat):
+    return ticks * (tempo / 1_000_000.0) / ticks_per_beat
+
+def midi_to_csv(midi_file_path, csv_file_path):
+    mid = MidiFile(midi_file_path)
+
+    ticks_per_beat = mid.ticks_per_beat
+    current_tempo = 500000
+
+    with open(csv_file_path, 'w', newline='') as csvfile:
+        csvwriter = csv.writer(csvfile)
+        csvwriter.writerow(['track', 'time', 'type', 'channel', 'note', 'velocity'])
+
+        for i, track in enumerate(mid.tracks):
+            cumulative_ticks = 0
+            cumulative_seconds = 0.0
+
+            for msg in track:
+                cumulative_ticks += msg.time
+                if msg.type == 'set_tempo':
+                    current_tempo = msg.tempo
+
+                if msg.type in ['note_on', 'note_off']:
+                    delta_seconds = ticks_to_seconds(msg.time, current_tempo, ticks_per_beat)
+                    cumulative_seconds += delta_seconds
+                    csvwriter.writerow([
+                        i, f"{cumulative_seconds:.3f}", msg.type, msg.channel, msg.note, msg.velocity
+                    ])
+                else:
+                    delta_seconds = ticks_to_seconds(msg.time, current_tempo, ticks_per_beat)
+                    cumulative_seconds += delta_seconds
+
+def convert_folder_to_csv(input_folder_path, output_folder_path):
+    if not os.path.exists(output_folder_path):
+        os.makedirs(output_folder_path)
+
+    for filename in os.listdir(input_folder_path):
+        if filename.endswith('.mid') or filename.endswith('.midi'):
+            midi_file_path = os.path.join(input_folder_path, filename)
+            csv_filename = f"{os.path.splitext(filename)[0]}.csv"
+            csv_file_path = os.path.join(output_folder_path, csv_filename)
+            midi_to_csv(midi_file_path, csv_file_path)
+            print(f'Converted {midi_file_path} to {csv_file_path}')
+
+convert_folder_to_csv(input_folder_path, output_folder_path)
